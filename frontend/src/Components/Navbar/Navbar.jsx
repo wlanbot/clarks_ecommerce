@@ -1,6 +1,6 @@
 import React, { useContext, useRef, useState } from 'react'
 import './Navbar.css'
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 import logo from '../Assets/clarks_logo.png'
 import cart_icon from '../Assets/cart_icon.png'
 import { ShopContext } from '../../Context/ShopContext'
@@ -10,12 +10,18 @@ const Navbar = () => {
 
   let [menu,setMenu] = useState("shop");
   const {getTotalCartItems} = useContext(ShopContext);
+  const navigate = useNavigate();
 
   const menuRef = useRef();
 
   const dropdown_toggle = (e) => {
     menuRef.current.classList.toggle('nav-menu-visible');
     e.target.classList.toggle('open');
+  }
+
+  const handleLogout = () => {
+    localStorage.removeItem('auth-token');
+    navigate('/');
   }
 
   return (
@@ -32,11 +38,22 @@ const Navbar = () => {
         <li onClick={()=>{setMenu("kids")}}><Link to='/kids' style={{ textDecoration: 'none' }}>Niño/a</Link>{menu==="kids"?<hr/>:<></>}</li>
       </ul>
       <div className="nav-login-cart">
-        {localStorage.getItem('auth-token')
-        ?<button onClick={()=>{localStorage.removeItem('auth-token');window.location.replace("/");}}>Cerrar sesión</button>
-        :<Link to='/login' style={{ textDecoration: 'none' }}><button>Iniciar sesión</button></Link>}
-        <Link to="/cart"><img src={cart_icon} alt="cart"/></Link>
-        <div className="nav-cart-count">{getTotalCartItems()}</div>
+        {localStorage.getItem('auth-token') ? (
+          <div className="nav-login-cart">
+            <Link to='/profile'>
+              <button>Mi Perfil</button>
+            </Link>
+            <button onClick={handleLogout}>Cerrar Sesión</button>
+            <Link to='/cart'>
+              <img src={cart_icon} alt="" />
+            </Link>
+            <div className="nav-cart-count">{getTotalCartItems()}</div>
+          </div>
+        ) : (
+          <Link to='/login'>
+            <button>Login</button>
+          </Link>
+        )}
       </div>
     </div>
   )

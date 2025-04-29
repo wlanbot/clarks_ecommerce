@@ -8,32 +8,34 @@
 }
 .cartitems-format-main{
     display: grid;
-    grid-template-columns: 0.5fr 2fr 1fr 1fr 1fr 1fr;
+    grid-template-columns: 0.5fr 2fr 1fr 1fr 1fr 1fr 0.5fr;
     align-items: center;
-    gap: 50px;
+    gap: 20px;
     padding: 20px 0px;
     color: #454545;
     font-size: 16px;
     font-weight: 600;
 }
 .cartitems-format{
-    
     font-size: 16px;
     font-weight: 500;
 }
 .cartitems-product-icon{
     height: 55px;
+    width: 55px;
+    object-fit: cover;
 }
 .cartitems-remove-icon{
     width: 12px;
-    margin: 0px 30px;
     cursor: pointer;
+    justify-self: center;
 }
 .cartitems-quantity{
     width: 55px;
     height: 45px;
     border: 2px solid #ebebeb;
     background: #fff;
+    text-align: center;
 }
 .cartitems-down{
     display: flex;
@@ -101,19 +103,20 @@
         margin: 60px 8%;
     }
     .cartitems-format-main{
-        grid-template-columns: 0.5fr 3fr 0.5fr 0.5fr 0.5fr 0.5fr;
-        gap: 20px;
+        grid-template-columns: 0.5fr 2fr 1fr 1fr 1fr 1fr 0.5fr;
+        gap: 15px;
         padding: 15px 0px;
         font-size: 15px;
     }
     .cartitems-format{
         font-size: 15px;
     }
-    .carticon-product-icon{
+    .cartitems-product-icon{
         height: 50px;
+        width: 50px;
     }
     .cartitems-remove-icon{
-        margin: auto;
+        margin: 0;
     }
     .cartitems-quantity{
         width: 40px;
@@ -137,17 +140,32 @@
         width: 90%;
         max-width: 500px;
     }
-    
+}
+@media(max-width:800px){
+    .cartitems-format-main{
+        grid-template-columns: 0.5fr 2fr 1fr 1fr 1fr 0.5fr;
+        font-size: 14px;
+    }
+    .cartitems-format{
+        font-size: 14px;
+    }
+    .cartitems-product-icon{
+        height: 40px;
+        width: 40px;
+    }
 }
 @media(max-width:500px){
     .cartitems-format-main{
-       display: none;
+        display: none;
     }
     .cartitems-format{
         display: grid;
-    }
-    .cartitems-format-main{
-        grid-template-columns: 0.5fr 3fr 0.5fr;
+        grid-template-columns: 0.5fr 2fr 1fr;
         gap: 10px;
+        font-size: 12px;
+    }
+    .cartitems-product-icon{
+        height: 35px;
+        width: 35px;
     }
 }
