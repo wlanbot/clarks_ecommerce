@@ -8,50 +8,24 @@ const UserProfile = () => {
   const [purchaseHistory, setPurchaseHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [activeTab, setActiveTab] = useState('profile');
   const navigate = useNavigate();
 
   useEffect(() => {
-    console.log('UserProfile component mounted');
-    const token = localStorage.getItem('auth-token');
-    console.log('Token:', token ? 'Present' : 'Not present');
-
-    if (!token) {
-      console.log('No token found, redirecting to login');
-      navigate('/login');
-      return;
-    }
-
-    const fetchUserData = async () => {
+    const fetchData = async () => {
       try {
-        console.log('Fetching user data...');
-        const response = await fetch(`${backend_url}/userdata`, {
-          headers: {
-            'auth-token': token
-          }
-        });
+        const token = localStorage.getItem('auth-token');
+        console.log('Token encontrado:', token);
 
-        console.log('User data response:', response.status);
-        if (response.ok) {
-          const data = await response.json();
-          console.log('User data received:', data);
-          setUserData(data);
-        } else {
-          console.log('Error fetching user data, redirecting to login');
+        if (!token) {
+          console.log('No hay token, redirigiendo a login');
           navigate('/login');
+          return;
         }
-      } catch (error) {
-        console.error('Error al obtener datos del usuario:', error);
-        setError('Error al cargar los datos del usuario');
-        navigate('/login');
-      } finally {
-        setLoading(false);
-      }
-    };
 
-    const fetchPurchaseHistory = async () => {
-      try {
-        console.log('Fetching purchase history...');
-        const response = await fetch(`${backend_url}/purchasehistory`, {
+        // Fetch user data
+        console.log('Intentando obtener datos del usuario...');
+        const userResponse = await fetch(`${backend_url}/userdata`, {
           method: 'POST',
           headers: {
             'auth-token': token,
@@ -59,89 +33,207 @@ const UserProfile = () => {
           }
         });
 
-        console.log('Purchase history response:', response.status);
-        if (response.ok) {
-          const data = await response.json();
-          console.log('Purchase history received:', data);
-          setPurchaseHistory(data.purchaseHistory || []);
-        } else {
-          console.log('Error fetching purchase history');
-          setError('Error al cargar el historial de compras');
+        console.log('Respuesta de userdata:', userResponse.status);
+        const userData = await userResponse.json();
+        console.log('Datos del usuario recibidos:', userData);
+
+        if (!userResponse.ok) {
+          throw new Error(userData.message || 'Error al obtener datos del usuario');
         }
+
+        if (!userData.success) {
+          throw new Error(userData.message || 'Error en la respuesta del servidor');
+        }
+
+        setUserData(userData);
+
+        // Fetch purchase history
+        console.log('Intentando obtener historial de compras...');
+        const purchaseResponse = await fetch(`${backend_url}/purchasehistory`, {
+          method: 'POST',
+          headers: {
+            'auth-token': token,
+            'Content-Type': 'application/json'
+          }
+        });
+
+        console.log('Respuesta de purchasehistory:', purchaseResponse.status);
+        const purchaseData = await purchaseResponse.json();
+        console.log('Historial de compras recibido:', purchaseData);
+
+        if (!purchaseResponse.ok) {
+          throw new Error(purchaseData.message || 'Error al obtener historial de compras');
+        }
+
+        if (!purchaseData.success) {
+          throw new Error(purchaseData.message || 'Error en la respuesta del servidor');
+        }
+
+        console.log('Datos de compra procesados:', purchaseData.purchaseHistory);
+        const processedHistory = purchaseData.purchaseHistory.map(purchase => ({
+          date: purchase.date,
+          total: purchase.total,
+          products: purchase.products
+        }));
+        console.log('Historial procesado:', processedHistory);
+        setPurchaseHistory(processedHistory);
+
       } catch (error) {
-        console.error('Error al obtener historial de compras:', error);
-        setError('Error al cargar el historial de compras');
+        console.error('Error en fetchData:', error);
+        setError(error.message);
+        if (error.message.includes('token') || error.message.includes('no autorizado')) {
+          localStorage.removeItem('auth-token');
+          navigate('/login');
+        }
+      } finally {
+        setLoading(false);
       }
     };
 
-    fetchUserData();
-    fetchPurchaseHistory();
+    fetchData();
   }, [navigate]);
 
   const handleLogout = () => {
-    localStorage.removeItem('auth-token');
-    navigate('/');
+    if (window.confirm('¿Estás seguro que deseas cerrar sesión?')) {
+      localStorage.removeItem('auth-token');
+      navigate('/');
+    }
   };
 
   if (loading) {
-    return <div className="user-profile">Cargando...</div>;
+    return (
+      <div className="user-profile">
+        <div className="loading-spinner">
+          <div className="spinner"></div>
+          <p>Cargando...</p>
+        </div>
+      </div>
+    );
   }
 
   if (error) {
-    return <div className="user-profile">{error}</div>;
+    return (
+      <div className="user-profile">
+        <div className="error-message">
+          <p>Error: {error}</p>
+          <button onClick={() => navigate('/login')}>Ir a iniciar sesión</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!userData) {
+    return (
+      <div className="user-profile">
+        <div className="error-message">
+          <p>No se pudieron cargar los datos del usuario</p>
+          <button onClick={() => navigate('/login')}>Ir a iniciar sesión</button>
+        </div>
+      </div>
+    );
   }
 
   return (
     <div className="user-profile">
+      <div className="profile-sidebar">
+        <div className="sidebar-header">
+          <h3>Mi Cuenta</h3>
+        </div>
+        <div className="sidebar-menu">
+          <button 
+            className={activeTab === 'profile' ? 'active' : ''} 
+            onClick={() => setActiveTab('profile')}
+          >
+            Información Personal
+          </button>
+          <button 
+            className={activeTab === 'purchases' ? 'active' : ''} 
+            onClick={() => setActiveTab('purchases')}
+          >
+            Mis Compras
+          </button>
+          <button className="logout-button" onClick={handleLogout}>
+            Cerrar Sesión
+          </button>
+        </div>
+      </div>
+
       <div className="profile-content">
-        <div className="profile-section">
-          <h2>Mi Perfil</h2>
-          {userData && (
+        {activeTab === 'profile' && (
+          <div className="profile-section">
+            <h2>Información Personal</h2>
             <div className="profile-info">
-              <p><strong>Nombre:</strong> {userData.name}</p>
-              <p><strong>Email:</strong> {userData.email}</p>
-              <p><strong>Miembro desde:</strong> {new Date(userData.date).toLocaleDateString()}</p>
+              <div className="profile-info-item">
+                <label>Nombre:</label>
+                <p>{userData.name}</p>
+              </div>
+              <div className="profile-info-item">
+                <label>Email:</label>
+                <p>{userData.email}</p>
+              </div>
+              <div className="profile-info-item">
+                <label>Miembro desde:</label>
+                <p>{new Date(userData.date).toLocaleDateString()}</p>
+              </div>
             </div>
-          )}
-        </div>
+          </div>
+        )}
 
-        <div className="purchases-section">
-          <h2>Mis Compras</h2>
-          {purchaseHistory.length > 0 ? (
-            <div className="purchase-list">
-              {purchaseHistory.map((purchase, index) => (
-                <div key={index} className="purchase-item">
-                  <div className="purchase-header">
-                    <span>Compra #{index + 1}</span>
-                    <span>{new Date(purchase.date).toLocaleDateString()}</span>
-                  </div>
-                  <div className="purchase-products">
-                    {purchase.products.map((item, itemIndex) => (
-                      <div key={itemIndex} className="purchase-product">
-                        <img src={backend_url + item.productDetails.image} alt={item.productDetails.name} />
-                        <div className="purchase-product-info">
-                          <h4>{item.productDetails.name}</h4>
-                          <p>Talla: {item.size}</p>
-                          <p>Cantidad: {item.quantity}</p>
-                          <p>Precio: ${item.productDetails.price}</p>
-                        </div>
+        {activeTab === 'purchases' && (
+          <div className="purchases-section">
+            <h2>Mis Compras</h2>
+            {purchaseHistory.length > 0 ? (
+              <div className="purchase-list">
+                {purchaseHistory.map((purchase, index) => {
+                  console.log(`Renderizando compra #${index + 1}:`, purchase);
+                  return (
+                    <div key={index} className="purchase-item">
+                      <div className="purchase-header">
+                        <span>Compra #{index + 1}</span>
+                        <span>
+                          {purchase.date ? new Date(purchase.date).toLocaleDateString('es-ES', {
+                            year: 'numeric',
+                            month: 'long',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          }) : 'Fecha no disponible'}
+                        </span>
                       </div>
-                    ))}
-                  </div>
-                  <div className="purchase-total">
-                    <strong>Total: ${purchase.total}</strong>
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p>No hay compras registradas</p>
-          )}
-        </div>
-
-        <button className="logout-button" onClick={handleLogout}>
-          Cerrar Sesión
-        </button>
+                      <div className="purchase-products">
+                        {purchase.products && purchase.products.map((item, itemIndex) => (
+                          <div key={itemIndex} className="purchase-product">
+                            <img 
+                              src={backend_url + (item.productDetails?.image || '')} 
+                              alt={item.productDetails?.name || 'Producto'} 
+                            />
+                            <div className="purchase-product-info">
+                              <h4>{item.productDetails?.name || 'Producto no disponible'}</h4>
+                              <div className="purchase-product-details">
+                                <p><strong>Talla:</strong> {item.size || 'No especificada'}</p>
+                                <p><strong>Cantidad:</strong> {item.quantity || 0}</p>
+                                <p><strong>Precio:</strong> ${(item.productDetails?.price || 0).toFixed(2)}</p>
+                                <p><strong>Subtotal:</strong> ${((item.productDetails?.price || 0) * (item.quantity || 0)).toFixed(2)}</p>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                      <div className="purchase-total">
+                        <strong>Total de la compra: ${(purchase.total || 0).toFixed(2)}</strong>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div className="no-purchases">
+                <p>No hay compras registradas</p>
+                <button onClick={() => navigate('/')}>Ir a la tienda</button>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

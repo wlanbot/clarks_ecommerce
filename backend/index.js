@@ -36,14 +36,14 @@ app.use('/images', express.static('upload/images'));
 const fetchuser = async (req, res, next) => {
   const token = req.header("auth-token");
   if (!token) {
-    res.status(401).send({ errors: "Token inválido" });
+    return res.status(401).send({ errors: "Token inválido" });
   }
   try {
     const data = jwt.verify(token, "secret_ecom");
     req.user = data.user;
     next();
   } catch (error) {
-    res.status(401).send({ errors: "Token inválido" });
+    return res.status(401).send({ errors: "Token inválido" });
   }
 };
 
@@ -78,10 +78,26 @@ const Product = mongoose.model("Product", {
   old_price: { type: Number },
   date: { type: Date, default: Date.now },
   avilable: { type: Boolean, default: true },
-  sizes: [{
-    size: { type: String, required: true },
-    stock: { type: Number, required: true, default: 0 }
-  }]
+  sizes: {
+    type: [{
+      size: { type: String, required: true, enum: ['S', 'M', 'L', 'XL', 'XXL'] },
+      stock: { type: Number, required: true, default: 0 }
+    }],
+    default: [
+      { size: 'S', stock: 0 },
+      { size: 'M', stock: 0 },
+      { size: 'L', stock: 0 },
+      { size: 'XL', stock: 0 },
+      { size: 'XXL', stock: 0 }
+    ],
+    validate: {
+      validator: function(sizes) {
+        const allowedSizes = ['S', 'M', 'L', 'XL', 'XXL'];
+        return sizes.every(size => allowedSizes.includes(size.size));
+      },
+      message: 'Solo se permiten las tallas S, M, L, XL y XXL'
+    }
+  }
 });
 
 
@@ -101,11 +117,11 @@ app.post('/login', async (req, res) => {
     if (passCompare) {
       const data = {
         user: {
-          id: user.id
+          id: user._id
         }
       }
       success = true;
-      console.log(user.id);
+      console.log("ID del usuario:", user._id);
       const token = jwt.sign(data, 'secret_ecom');
       res.json({ success, token });
     }
@@ -282,6 +298,7 @@ app.post("/addproduct", async (req, res) => {
     id = last_product.id + 1;
   }
   else { id = 1; }
+  
   const product = new Product({
     id: id,
     name: req.body.name,
@@ -290,9 +307,17 @@ app.post("/addproduct", async (req, res) => {
     category: req.body.category,
     new_price: req.body.new_price,
     old_price: req.body.old_price,
+    sizes: req.body.sizes || [
+      { size: 'S', stock: 0 },
+      { size: 'M', stock: 0 },
+      { size: 'L', stock: 0 },
+      { size: 'XL', stock: 0 },
+      { size: 'XXL', stock: 0 }
+    ]
   });
+  
   await product.save();
-  console.log("Producto guardado");
+  console.log("Producto guardado con tallas:", product.sizes);
   res.json({ success: true, name: req.body.name })
 });
 
@@ -336,6 +361,18 @@ app.post("/updateproduct", async (req, res) => {
         message: "Producto no encontrado",
         id: id 
       });
+    }
+
+    // Validar que las tallas sean las permitidas
+    if (sizes) {
+      const allowedSizes = ['S', 'M', 'L', 'XL', 'XXL'];
+      const validSizes = sizes.every(size => allowedSizes.includes(size.size));
+      if (!validSizes) {
+        return res.status(400).json({
+          success: false,
+          message: "Solo se permiten las tallas S, M, L, XL y XXL"
+        });
+      }
     }
 
     console.log("Producto encontrado:", product);
@@ -493,7 +530,9 @@ app.post('/purchasehistory', fetchuser, async (req, res) => {
           purchase.products.map(async (item) => {
             const product = await Product.findOne({ id: item.productId });
             return {
-              ...item,
+              productId: item.productId,
+              size: item.size,
+              quantity: item.quantity,
               productDetails: product ? {
                 name: product.name,
                 image: product.image,
@@ -502,12 +541,19 @@ app.post('/purchasehistory', fetchuser, async (req, res) => {
             };
           })
         );
+
         return {
-          ...purchase,
+          date: purchase.date ? new Date(purchase.date).toISOString() : null,
+          total: purchase.total || 0,
           products: productsWithDetails
         };
       })
     );
+
+    // Ordenar las compras por fecha, más recientes primero
+    purchaseHistoryWithDetails.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    console.log("Historial de compras procesado:", purchaseHistoryWithDetails);
 
     res.json({ 
       success: true, 
@@ -530,77 +576,52 @@ app.post('/registerpurchase', fetchuser, async (req, res) => {
     console.log("Datos recibidos:", JSON.stringify(req.body, null, 2));
     
     const { products, total } = req.body;
-    
-    if (!products || !Array.isArray(products) || products.length === 0) {
-      console.log("Error: No hay productos en la compra");
-      return res.status(400).json({ success: false, message: "No hay productos en la compra" });
-    }
+    const userId = req.user.id;
 
-    const user = await Users.findOne({ _id: req.user.id });
-    if (!user) {
-      console.log("Error: Usuario no encontrado");
-      return res.status(404).json({ success: false, message: "Usuario no encontrado" });
-    }
+    // Verificar y actualizar el stock de cada producto
+    for (const product of products) {
+      console.log(`\nProcesando producto: ${product.name} (ID: ${product.id})`);
+      console.log(`Talla: ${product.size}, Cantidad: ${product.quantity}`);
 
-    // Verificar stock y actualizar
-    for (const item of products) {
-      console.log(`\nProcesando producto: ${item.name} (ID: ${item.id})`);
-      console.log(`Talla: ${item.size}, Cantidad: ${item.quantity}`);
-
-      const product = await Product.findOne({ id: item.id });
-      if (!product) {
-        console.log(`Error: Producto no encontrado - ID: ${item.id}`);
-        return res.status(404).json({ success: false, message: `Producto no encontrado: ${item.name}` });
+      const productDoc = await Product.findOne({ id: product.id });
+      if (!productDoc) {
+        console.log(`Error: Producto no encontrado - ID: ${product.id}`);
+        return res.status(404).json({ success: false, message: `Producto ${product.id} no encontrado` });
       }
 
-      console.log("Producto encontrado:", {
-        nombre: product.name,
-        stockActual: product.sizes
-      });
-
-      const sizeIndex = product.sizes.findIndex(s => s.size === item.size);
+      // Encontrar la talla específica
+      const sizeIndex = productDoc.sizes.findIndex(s => s.size === product.size);
       if (sizeIndex === -1) {
-        console.log(`Error: Talla no encontrada - ${item.size}`);
-        return res.status(400).json({ success: false, message: `Talla no encontrada: ${item.size}` });
+        console.log(`Error: Talla no encontrada - ${product.size}`);
+        return res.status(400).json({ success: false, message: `Talla ${product.size} no disponible para el producto ${product.id}` });
       }
 
-      if (product.sizes[sizeIndex].stock < item.quantity) {
-        console.log(`Error: Stock insuficiente - Disponible: ${product.sizes[sizeIndex].stock}, Requerido: ${item.quantity}`);
+      // Verificar si hay suficiente stock
+      if (productDoc.sizes[sizeIndex].stock < product.quantity) {
+        console.log(`Error: Stock insuficiente - Disponible: ${productDoc.sizes[sizeIndex].stock}, Requerido: ${product.quantity}`);
         return res.status(400).json({ 
           success: false, 
-          message: `No hay suficiente stock para ${product.name} en talla ${item.size}. Stock disponible: ${product.sizes[sizeIndex].stock}` 
+          message: `Stock insuficiente para el producto ${productDoc.name} en talla ${product.size}. Stock disponible: ${productDoc.sizes[sizeIndex].stock}` 
         });
       }
 
       // Actualizar el stock
-      const updateQuery = {
-        id: item.id,
-        "sizes.size": item.size
-      };
+      console.log(`Stock actual antes de la compra: ${productDoc.sizes[sizeIndex].stock}`);
+      productDoc.sizes[sizeIndex].stock -= product.quantity;
+      console.log(`Stock actual después de la compra: ${productDoc.sizes[sizeIndex].stock}`);
       
-      const updateOperation = {
-        $inc: { "sizes.$.stock": -item.quantity }
-      };
-
-      console.log("Query de actualización:", JSON.stringify(updateQuery, null, 2));
-      console.log("Operación de actualización:", JSON.stringify(updateOperation, null, 2));
-
-      const updatedProduct = await Product.findOneAndUpdate(
-        updateQuery,
-        updateOperation,
-        { new: true }
-      );
-
-      if (!updatedProduct) {
-        console.log("Error: No se pudo actualizar el producto");
-        return res.status(500).json({ success: false, message: "Error al actualizar el stock" });
-      }
-
-      console.log(`Stock actualizado exitosamente para ${product.name}`);
-      console.log(`Nuevo stock para talla ${item.size}: ${updatedProduct.sizes.find(s => s.size === item.size).stock}`);
+      // Guardar los cambios en el producto
+      const updatedProduct = await productDoc.save();
+      console.log(`Stock actualizado exitosamente para ${productDoc.name} en talla ${product.size}`);
+      console.log(`Nuevo stock: ${updatedProduct.sizes[sizeIndex].stock}`);
     }
 
-    // Crear el objeto de compra
+    // Registrar la compra
+    const user = await Users.findById(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+
     const purchase = {
       products: products.map(item => ({
         productId: item.id,
@@ -611,19 +632,14 @@ app.post('/registerpurchase', fetchuser, async (req, res) => {
       date: new Date()
     };
 
-    console.log("\nRegistrando compra en el historial del usuario");
     user.purchaseHistory.push(purchase);
     await user.save();
 
-    console.log("Limpiando carrito");
-    user.cartData = {};
-    await user.save();
-
     console.log("=== Compra registrada exitosamente ===");
-    res.json({ success: true, message: "Compra registrada exitosamente" });
+    res.json({ success: true, message: 'Compra registrada exitosamente' });
   } catch (error) {
-    console.error("Error al registrar la compra:", error);
-    res.status(500).json({ success: false, message: "Error al registrar la compra" });
+    console.error('Error al registrar la compra:', error);
+    res.status(500).json({ success: false, message: 'Error al registrar la compra' });
   }
 });
 
@@ -644,6 +660,59 @@ app.post('/userdata', fetchuser, async (req, res) => {
   } catch (error) {
     console.error("Error al obtener datos del usuario:", error);
     res.status(500).json({ success: false, message: "Error al obtener datos del usuario" });
+  }
+});
+
+//endpoint temporal para actualizar todos los productos con tallas predefinidas
+app.post("/updateallproducts", async (req, res) => {
+  try {
+    console.log("Iniciando actualización de todos los productos...");
+    
+    const defaultSizes = [
+      { size: 'S', stock: 0 },
+      { size: 'M', stock: 0 },
+      { size: 'L', stock: 0 },
+      { size: 'XL', stock: 0 },
+      { size: 'XXL', stock: 0 }
+    ];
+
+    // Obtener todos los productos
+    const products = await Product.find({});
+    console.log(`Encontrados ${products.length} productos para actualizar`);
+
+    // Actualizar cada producto
+    for (const product of products) {
+      // Preservar el stock existente si existe
+      const updatedSizes = defaultSizes.map(defaultSize => {
+        const existingSize = product.sizes?.find(s => s.size === defaultSize.size);
+        return {
+          size: defaultSize.size,
+          stock: existingSize ? existingSize.stock : 0
+        };
+      });
+
+      // Actualizar el producto
+      await Product.findOneAndUpdate(
+        { _id: product._id },
+        { $set: { sizes: updatedSizes } },
+        { new: true }
+      );
+
+      console.log(`Producto actualizado: ${product.name}`);
+    }
+
+    console.log("Actualización completada exitosamente");
+    res.json({ 
+      success: true, 
+      message: `Se actualizaron ${products.length} productos exitosamente` 
+    });
+  } catch (error) {
+    console.error("Error al actualizar productos:", error);
+    res.status(500).json({ 
+      success: false, 
+      message: "Error al actualizar los productos",
+      error: error.message 
+    });
   }
 });
 

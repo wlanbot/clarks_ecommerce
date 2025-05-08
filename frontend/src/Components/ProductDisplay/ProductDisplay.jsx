@@ -50,14 +50,6 @@ const ProductDisplay = () => {
       </div>
       <div className="productdisplay-right">
         <h1>{product.name}</h1>
-        <div className="productdisplay-right-stars">
-          <img src={star_icon} alt="" />
-          <img src={star_icon} alt="" />
-          <img src={star_icon} alt="" />
-          <img src={star_icon} alt="" />
-          <img src={star_dull_icon} alt="" />
-          <p>(122)</p>
-        </div>
         <div className="productdisplay-right-prices">
           <div className="productdisplay-right-price-old">
             {currency}{product.old_price}
