@@ -14,6 +14,7 @@ const getDefaultCart = () => {
 const ShopContextProvider = (props) => {
   const [products, setProducts] = useState([]);
   const [cartItems, setCartItems] = useState(getDefaultCart());
+  const [selectedSizes, setSelectedSizes] = useState({});
 
   useEffect(() => {
     fetch(`${backend_url}/allproducts`)
@@ -32,13 +33,7 @@ const ShopContextProvider = (props) => {
       })
         .then((resp) => resp.json())
         .then((data) => { 
-          // Convertir los datos del carrito al formato original
-          const formattedCart = getDefaultCart();
-          Object.entries(data).forEach(([key, value]) => {
-            const [itemId] = key.split('-');
-            formattedCart[itemId] = value.quantity || 0;
-          });
-          setCartItems(formattedCart);
+          setCartItems(data);
         });
     }
   }, []);
@@ -84,39 +79,60 @@ const ShopContextProvider = (props) => {
           newCart[itemId] = (newCart[itemId] || 0) + 1;
           return newCart;
         });
+        setSelectedSizes(prev => ({
+          ...prev,
+          [itemId]: size
+        }));
+        alert('Producto agregado al carrito');
       }
     } catch (error) {
       console.error('Error al agregar al carrito:', error);
+      alert('Error al agregar el producto al carrito');
     }
   };
 
-  const removeFromCart = async (itemId) => {
-    try {
-      const response = await fetch(`${backend_url}/removefromcart`, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'auth-token': `${localStorage.getItem('auth-token')}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ itemId }),
-      });
-
-      if (response.ok) {
-        setCartItems((prev) => {
-          const newCart = { ...prev };
-          if (newCart[itemId] > 0) {
-            newCart[itemId] -= 1;
-          }
-          return newCart;
+  const removeFromCart = async (itemId, isAfterPurchase = false) => {
+    if (isAfterPurchase || window.confirm('¿Estás seguro que deseas eliminar este producto del carrito?')) {
+      try {
+        const size = selectedSizes[itemId];
+        const response = await fetch(`${backend_url}/removefromcart`, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'auth-token': `${localStorage.getItem('auth-token')}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ itemId, size }),
         });
+
+        if (response.ok) {
+          setCartItems((prev) => {
+            const newCart = { ...prev };
+            if (newCart[itemId] > 0) {
+              newCart[itemId] -= 1;
+            }
+            return newCart;
+          });
+          if (!isAfterPurchase) {
+            alert('Producto eliminado del carrito');
+          }
+        }
+      } catch (error) {
+        console.error('Error al eliminar del carrito:', error);
+        alert('Error al eliminar el producto del carrito');
       }
-    } catch (error) {
-      console.error('Error al eliminar del carrito:', error);
     }
   };
 
-  const contextValue = { products, getTotalCartItems, cartItems, addToCart, removeFromCart, getTotalCartAmount };
+  const contextValue = { 
+    products, 
+    getTotalCartItems, 
+    cartItems, 
+    addToCart, 
+    removeFromCart, 
+    getTotalCartAmount,
+    selectedSizes 
+  };
 
   return (
     <ShopContext.Provider value={contextValue}>

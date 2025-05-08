@@ -20,8 +20,10 @@ const Navbar = () => {
   }
 
   const handleLogout = () => {
-    localStorage.removeItem('auth-token');
-    navigate('/');
+    if (window.confirm('¿Estás seguro que deseas cerrar sesión?')) {
+      localStorage.removeItem('auth-token');
+      navigate('/');
+    }
   }
 
   return (
