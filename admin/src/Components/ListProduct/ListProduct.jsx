@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
 import "./ListProduct.css";
 import cross_icon from '../Assets/cross_icon.png'
+import clarks_logo from '../Assets/clarks_logo.png'
 import { backend_url, currency } from "../../App";
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const ListProduct = () => {
   const [allproducts, setAllProducts] = useState([]);
@@ -138,9 +141,53 @@ const ListProduct = () => {
     }
   }
 
+  const generateReport = () => {
+    const doc = new jsPDF();
+    
+    // Agregar el logo con transparencia
+    doc.addImage(clarks_logo, 'PNG', 14, 10, 45, 35, undefined, 'FAST', 0.4);
+    
+    // Título del reporte
+    doc.setFontSize(16);
+    doc.text('Reporte de Productos', 65, 25);
+    
+    // Fecha de generación
+    doc.setFontSize(10);
+    doc.text(`Generado el: ${new Date().toLocaleDateString()}`, 65, 35);
+    
+    // Tabla de productos
+    const tableColumn = ["Nombre", "Precio Anterior", "Precio Nuevo", "Categoría", "Stock Total"];
+    const tableRows = allproducts.map(product => {
+      const totalStock = product.sizes ? product.sizes.reduce((sum, size) => sum + (size.stock || 0), 0) : 0;
+      return [
+        product.name,
+        `${currency}${product.old_price}`,
+        `${currency}${product.new_price}`,
+        product.category,
+        totalStock.toString()
+      ];
+    });
+    
+    autoTable(doc, {
+      head: [tableColumn],
+      body: tableRows,
+      startY: 45,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [65, 116, 255] }
+    });
+    
+    // Guardar el PDF
+    doc.save('reporte_productos.pdf');
+  };
+
   return (
     <div className="listproduct">
-      <h1>Productos registrados</h1>
+      <div className="listproduct-header">
+        <h1>Productos registrados</h1>
+        <button onClick={generateReport} className="report-button">
+          Generar Reporte
+        </button>
+      </div>
       <div className="listproduct-format-main">
         <p>Imagen</p> <p>Nombre</p> <p>Precio anterior</p> <p>Precio nuevo</p> <p>Categoria</p> <p>Acciones</p>
       </div>

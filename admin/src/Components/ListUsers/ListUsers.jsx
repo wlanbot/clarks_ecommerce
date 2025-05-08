@@ -1,7 +1,10 @@
 import React, { useEffect, useState } from "react";
 import "./ListUsers.css";
 import cross_icon from '../Assets/cross_icon.png'
+import clarks_logo from '../Assets/clarks_logo.png'
 import { backend_url } from "../../App";
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
 
 const ListUsers = () => {
   const [allusers, setAllUsers] = useState([]);
@@ -121,9 +124,48 @@ const ListUsers = () => {
     }
   }
 
+  const generateReport = () => {
+    const doc = new jsPDF();
+    
+    // Agregar el logo con transparencia
+    doc.addImage(clarks_logo, 'PNG', 14, 10, 45, 35, undefined, 'FAST', 0.4);
+    
+    // Título del reporte
+    doc.setFontSize(16);
+    doc.text('Reporte de Usuarios', 65, 25);
+    
+    // Fecha de generación
+    doc.setFontSize(10);
+    doc.text(`Generado el: ${new Date().toLocaleDateString()}`, 65, 35);
+    
+    // Tabla de usuarios
+    const tableColumn = ["Nombre", "Email", "Fecha de Registro"];
+    const tableRows = allusers.map(user => [
+      user.name,
+      user.email,
+      new Date(user.date).toLocaleDateString()
+    ]);
+    
+    autoTable(doc, {
+      head: [tableColumn],
+      body: tableRows,
+      startY: 45,
+      styles: { fontSize: 8 },
+      headStyles: { fillColor: [65, 116, 255] }
+    });
+    
+    // Guardar el PDF
+    doc.save('reporte_usuarios.pdf');
+  };
+
   return (
     <div className="listusers">
-      <h1>Usuarios registrados</h1>
+      <div className="listusers-header">
+        <h1>Usuarios registrados</h1>
+        <button onClick={generateReport} className="report-button">
+          Generar Reporte
+        </button>
+      </div>
       {allusers.length === 0 ? (
         <div className="no-users-message">
           <p>No hay usuarios registrados</p>
