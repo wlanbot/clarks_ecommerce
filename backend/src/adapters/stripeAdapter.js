@@ -1,117 +1,115 @@
 const Stripe = require('stripe');
-const { STRIPE_ACCESS_TOKEN, STRIPE_WEBHOOK_SECRET } = require('../../config/config');
+const PaymentProviderAdapter = require('./payment-provider.adapter');
 const { PaymentProviderError } = require('../utils/paymentErrors');
-
+const config = require('../../config/config');
+const logger = require('../utils/logger');
+const { PaymentStatus } = require('../models/enums');
 class StripeAdapter {
   constructor() {
-    this.stripe = new Stripe(STRIPE_ACCESS_TOKEN);
-    this.logger = console;
+    this.stripe = new Stripe(config.stripe.secretKey);
   }
 
   async createPayment(options) {
     try {
       const session = await this.stripe.checkout.sessions.create({
         payment_method_types: ['card'],
-        line_items:
-          options.items?.map((item) => ({
-            price_data: {
-              currency: options.currency.toLowerCase(),
-              product_data: {
-                name: item.title,
-                description: item.description,
-              },
-              unit_amount: Math.round(item.unitPrice * 100), // Stripe uses cents
+        line_items: options.items.map(item => ({
+          price_data: {
+            currency: options.currency.toLowerCase(),
+            product_data: {
+              name: item.title,
+              description: item.description,
             },
-            quantity: item.quantity,
-          })) || [],
+            unit_amount: Math.round(item.unitPrice * 100),
+          },
+          quantity: item.quantity,
+        })),
         mode: 'payment',
-        success_url: `${options.callbackUrl || process.env.PAYMENT_CALLBACK_SUCCESS_URL}`,
-        cancel_url: `${options.callbackUrl || process.env.PAYMENT_CALLBACK_CANCEL_URL}`,
+        metadata: {
+          addressId: options.metadata.addressId,
+          shippingAddress: JSON.stringify(options.metadata.shippingAddress),
+          orderId: options.metadata.orderId
+        },
+        success_url: `${options.callbackUrl}/success`,
+        cancel_url: `${options.callbackUrl}/cancel`,
         customer_email: options.customerEmail,
-        metadata: options.metadata,
       });
 
       return {
-        id: session.id,
-        status: 'PENDING',
+        status: PaymentStatus.PENDING,
         providerPaymentId: session.id,
         redirectUrl: session.url,
         processorResponse: session,
+        externalReference: options.externalReference,
+        amount: options.amount,
       };
     } catch (error) {
-      this.logger.error('Stripe create payment error:', error);
-      throw new PaymentProviderError('Stripe', error);
+      console.error('Stripe create payment error:', error);
+      throw new PaymentProviderError(PaymentProvider.STRIPE, error);
     }
   }
 
   async getPaymentDetails(paymentIds) {
     try {
-      // In Stripe, we would retrieve the session or payment intent
-      const { providerPaymentId } = paymentIds;
+      const session = await this.stripe.checkout.sessions.retrieve(
+        paymentIds.providerPaymentId
+      );
 
-      const paymentIntent =
-        await this.stripe.checkout.sessions.retrieve(providerPaymentId);
-
-      // Map Stripe statuses to our application statuses
       const statusMap = {
-        requires_payment_method: 'PENDING',
-        requires_confirmation: 'PENDING',
-        requires_action: 'PENDING',
-        processing: 'PENDING',
-        requires_capture: 'PENDING',
-        canceled: 'CANCELLED',
-        succeeded: 'APPROVED',
-        complete: 'APPROVED',
+        complete: PaymentStatus.APPROVED,
+        expired: PaymentStatus.CANCELLED,
+        open: PaymentStatus.PENDING,
       };
 
-      return statusMap[paymentIntent.status] || 'PENDING';
+      return statusMap[session.status] || PaymentStatus.PENDING;
     } catch (error) {
-      this.logger.error('Stripe get payment status error:', error);
-      throw new PaymentProviderError('Stripe', error);
+      console.error('Stripe get payment status error:', error);
+      throw new PaymentProviderError(PaymentProvider.STRIPE, error);
     }
   }
 
   async refundPayment(options) {
-    const { orderId, payment_intent } = options.paymentIds;
-    const { customerId, amount } = options;
-    try {
-      // Siguiendo la documentación, Stripe acepta 'charge' o 'payment_intent'
-      // El param 'amount' es opcional - si no se proporciona, realiza un reembolso completo
-      const bodyRefund = {
-        payment_intent,
-        amount: amount ? Math.round(amount * 100) : undefined, // Convertir a centavos si existe
-        metadata: {
-          orderId,
-          customerId
-        },
-      };
+    const { payment_intent } = options.paymentIds;
+    const { amount } = options;
 
-      const refund = await this.stripe.refunds.create(bodyRefund);
+    try {
+      const refund = await this.stripe.refunds.create({
+        payment_intent,
+        amount: amount ? Math.round(amount * 100) : undefined,
+      });
 
       return {
-        id: orderId,
+        id: options.paymentIds.orderId,
         status: this.mapStripeStatus(refund.status),
         refundId: refund.id,
         processorResponse: refund,
       };
     } catch (error) {
-      this.logger.error('Stripe refund error:', error.message);
-      throw new PaymentProviderError('Stripe', error);
+      console.error('Stripe refund error:', error.message);
+      
+      if (error.code === 'charge_already_refunded') {
+        return {
+          id: options.paymentIds.orderId,
+          status: PaymentStatus.REFUNDED,
+          refundId: null,
+          processorResponse: error.raw,
+        };
+      }
+      
+      throw new PaymentProviderError(PaymentProvider.STRIPE, error);
     }
   }
 
-  async processWebhook(payload) {
-    const signature = payload.signature;
+  async processWebhook({ payload, signature }) {
     try {
       if (!signature) {
-        throw new Error(
-          'Stripe signature is required for webhook verification',
-        );
+        throw new Error('Stripe signature is required for webhook verification');
       }
+
       const event = this.stripe.webhooks.constructEvent(
-        payload.payload,
+        payload,
         signature,
-        STRIPE_WEBHOOK_SECRET
+        process.env.STRIPE_WEBHOOK_SECRET
       );
 
       // Extraer metadata de manera segura
@@ -126,134 +124,85 @@ class StripeAdapter {
       return {
         paymentId: event.id,
         status: this.mapStripeStatus(event.type),
-        provider: 'STRIPE',
+        provider: PaymentProvider.STRIPE,
         ...(metadata?.orderId && { externalReference: metadata.orderId }),
         data: event.data?.object,
       };
     } catch (error) {
       this.logger.error('Stripe webhook verification failed', error);
-      throw new PaymentProviderError('Stripe', error);
+      throw new PaymentProviderError(PaymentProvider.STRIPE, error);
     }
   }
 
   async getRefunds(paymentIds) {
     try {
-      const { payment_intent } = paymentIds;
-      // Stripe permite filtrar reembolsos por payment_intent
-      const refundsResponse = await this.stripe.refunds.list({
-        payment_intent,
-        limit: 100, // Ajustar según necesidades
+      const refunds = await this.stripe.refunds.list({
+        payment_intent: paymentIds.payment_intent,
+        limit: 100,
       });
 
-      const refunds = refundsResponse.data.map((refund) => ({
-        id: refund.id,
-        amount: refund.amount / 100, // Convertir de centavos a unidades
-        status: this.mapRefundStatus(refund.status),
-        dateCreated: new Date(refund.created * 1000), // Convertir timestamp Unix a Date
-        metadata: refund.metadata,
-      }));
-
       return {
-        paymentId: payment_intent,
-        refunds,
+        paymentId: paymentIds.orderId,
+        refunds: refunds.data.map(refund => ({
+          id: refund.id,
+          amount: refund.amount / 100,
+          status: this.mapRefundStatus(refund.status),
+          dateCreated: new Date(refund.created * 1000),
+          metadata: refund.metadata,
+        })),
       };
     } catch (error) {
-      this.logger.error('Stripe get refunds error:', error);
-      throw new PaymentProviderError('Stripe', error);
+      console.error('Stripe get refunds error:', error);
+      throw new PaymentProviderError(PaymentProvider.STRIPE, error);
     }
   }
 
   async getRefund(paymentIds) {
     try {
-      const { payment_intent, refundId } = paymentIds;
-      const refund = await this.stripe.refunds.retrieve(refundId);
+      const refund = await this.stripe.refunds.retrieve(paymentIds.refundId);
 
-      // Verificar que el reembolso pertenece al pago indicado
-      if (refund.payment_intent !== payment_intent) {
-        throw new Error(`Refund ${refundId} not found for payment ${payment_intent}`);
+      if (refund.payment_intent !== paymentIds.payment_intent) {
+        throw new Error(`Refund ${paymentIds.refundId} not found for payment ${paymentIds.orderId}`);
       }
 
       return {
         id: refund.id,
-        amount: refund.amount / 100, // Convertir de centavos a unidades
+        amount: refund.amount / 100,
         status: this.mapRefundStatus(refund.status),
-        dateCreated: new Date(refund.created * 1000), // Convertir timestamp Unix a Date
+        dateCreated: new Date(refund.created * 1000),
         metadata: refund.metadata,
       };
     } catch (error) {
-      this.logger.error('Stripe get refund error:', error);
-      throw new PaymentProviderError('Stripe', error);
+      console.error('Stripe get refund error:', error);
+      throw new PaymentProviderError(PaymentProvider.STRIPE, error);
     }
   }
 
-  // Método auxiliar para mapear estados
   mapStripeStatus(eventType) {
     const statusMap = {
-      // Payment Intents
-      'payment_intent.succeeded': 'APPROVED',
-      'payment_intent.payment_failed': 'REJECTED',
-      'payment_intent.canceled': 'CANCELLED',
-      'payment_intent.processing': 'PENDING',
-      'payment_intent.requires_action': 'PENDING',
-      'payment_intent.partially_funded': 'PARTIALLY_PAID',
-
-      // Charges
-      'charge.succeeded': 'APPROVED',
-      'charge.failed': 'REJECTED',
-      'charge.pending': 'PENDING',
-      'charge.refunded': 'REFUNDED',
-      'charge.dispute.created': 'DISPUTED',
-      'charge.dispute.closed': 'DISPUTE_CLOSED',
-
-      // Refunds
-      'refund.created': 'REFUND_PENDING',
-      'refund.updated': 'REFUND_PENDING',
-      'refund.succeeded': 'REFUNDED',
-      'refund.failed': 'REFUND_FAILED',
-      succeeded: 'REFUNDED',
-
-      // Checkout Sessions
-      'checkout.session.completed': 'APPROVED',
-      'checkout.session.expired': 'EXPIRED',
-      'checkout.session.async_payment_succeeded': 'APPROVED',
-      'checkout.session.async_payment_failed': 'REJECTED',
-
-      // Disputes
-      'charge.dispute.funds_withdrawn': 'FUNDS_HELD',
-      'charge.dispute.funds_reinstated': 'FUNDS_REINSTATED',
-
-      // Subscription statuses
-      'customer.subscription.created': 'ACTIVE',
-      'customer.subscription.updated': 'ACTIVE',
-      'customer.subscription.deleted': 'CANCELLED',
-      'customer.subscription.paused': 'PAUSED',
-      'customer.subscription.resumed': 'ACTIVE',
-      'customer.subscription.trial_will_end': 'TRIAL_ENDS_SOON',
+      'payment_intent.succeeded': PaymentStatus.APPROVED,
+      'payment_intent.payment_failed': PaymentStatus.REJECTED,
+      'payment_intent.canceled': PaymentStatus.CANCELLED,
+      'charge.succeeded': PaymentStatus.APPROVED,
+      'charge.failed': PaymentStatus.REJECTED,
+      'charge.refunded': PaymentStatus.REFUNDED,
+      'checkout.session.completed': PaymentStatus.APPROVED,
+      'checkout.session.expired': PaymentStatus.CANCELLED,
     };
 
-    // Estado por defecto basado en el tipo de evento
-    if (!statusMap[eventType]) {
-      if (eventType.includes('.succeeded')) return 'APPROVED';
-      if (eventType.includes('.failed') || eventType.includes('.canceled'))
-        return 'REJECTED';
-      if (eventType.includes('.pending') || eventType.includes('.processing'))
-        return 'PENDING';
-      if (eventType.includes('.refund')) return 'REFUNDED';
-    }
-
-    return statusMap[eventType] || 'UNKNOWN';
+    return statusMap[eventType] || PaymentStatus.PENDING;
   }
 
   mapRefundStatus(status) {
     const statusMap = {
-      succeeded: 'APPROVED',
-      pending: 'PENDING',
-      failed: 'REJECTED',
-      canceled: 'CANCELLED',
+      succeeded: PaymentStatus.APPROVED,
+      pending: PaymentStatus.PENDING,
+      failed: PaymentStatus.REJECTED,
+      canceled: PaymentStatus.CANCELLED,
     };
 
-    return statusMap[status] || 'UNKNOWN';
+    return statusMap[status] || PaymentStatus.PENDING;
   }
 }
 
-module.exports = new StripeAdapter();
+module.exports = StripeAdapter;

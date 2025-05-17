@@ -36,9 +36,25 @@ const PaymentSchema = new mongoose.Schema({
   metadata: {
     type: Object,
     default: {}
+  },
+  cliente: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Users'
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now
+  },
+  updatedAt: {
+    type: Date,
+    default: Date.now
   }
-}, { 
-  timestamps: true 
+});
+
+// Actualizar la fecha de modificación antes de guardar
+PaymentSchema.pre('save', function(next) {
+  this.updatedAt = Date.now();
+  next();
 });
 
 module.exports = mongoose.model('Payment', PaymentSchema);

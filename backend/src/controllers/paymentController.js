@@ -1,677 +1,385 @@
-const paymentService = require('../services/paymentService');
-const paymentRepository = require('../repositories/PaymentRepository');
-const { PaymentNotFoundError, InvalidPaymentStatusError } = require('../utils/paymentErrors');
-const { PaymentProvider, PaymentStatus } = require('../models/enums');
-const Money = require('../valueObjects/Money');
-const Payment = require('../entities/Payment');
+const Payment = require('../models/Payment');
+const User = require('../models/User');
+const paymentService = require('../services/PaymentService');
+const { PaymentStatus, PaymentProvider } = require('../utils/constants');
+const { PaymentNotFoundError, InvalidPaymentStatusError, PaymentProviderError } = require('../utils/paymentErrors');
+const logger = require('../utils/logger');
 
-/**
- * @swagger
- * components:
- *   schemas:
- *     PaymentItem:
- *       type: object
- *       properties:
- *         id:
- *           type: string
- *           description: Identificador del ítem
- *         title:
- *           type: string
- *           description: Título del ítem
- *         description:
- *           type: string
- *           description: Descripción del ítem
- *         quantity:
- *           type: number
- *           description: Cantidad
- *         unitPrice:
- *           type: number
- *           description: Precio unitario
- *     CreatePaymentRequest:
- *       type: object
- *       required:
- *         - amount
- *         - currency
- *         - description
- *         - provider
- *       properties:
- *         amount:
- *           type: number
- *           description: Monto del pago
- *         currency:
- *           type: string
- *           description: Moneda (código de 3 letras)
- *         description:
- *           type: string
- *           description: Descripción del pago
- *         callbackUrl:
- *           type: string
- *           description: URL de retorno después del pago
- *         customerEmail:
- *           type: string
- *           description: Email del cliente
- *         items:
- *           type: array
- *           items:
- *             $ref: '#/components/schemas/PaymentItem'
- *         metadata:
- *           type: object
- *           description: Metadatos adicionales
- *         provider:
- *           type: string
- *           enum: [MERCADO_PAGO, STRIPE, PAYPAL]
- *           description: Proveedor de pago
- *     PaymentStatusResponse:
- *       type: object
- *       properties:
- *         id:
- *           type: string
- *           description: ID del pago
- *         status:
- *           type: string
- *           enum: [PENDING, APPROVED, REJECTED, REFUNDED, CANCELLED]
- *           description: Estado del pago
- *         orderId:
- *           type: string
- *           description: ID de la orden
- *         transactionId:
- *           type: string
- *           description: ID de la transacción del proveedor
- *         providerPaymentId:
- *           type: string
- *           description: ID del pago en el proveedor
- *         provider:
- *           type: string
- *           description: Proveedor del pago
- *         amount:
- *           type: number
- *           description: Monto del pago
- *         currency:
- *           type: string
- *           description: Moneda
- *         createdAt:
- *           type: string
- *           format: date-time
- *           description: Fecha de creación
- *         processorResponse:
- *           type: object
- *           description: Respuesta del procesador de pago
- *     RefundRequest:
- *       type: object
- *       properties:
- *         amount:
- *           type: number
- *           description: Monto a reembolsar (opcional, por defecto el monto total)
- */
-
-/**
- * @swagger
- * /api/payments:
- *   post:
- *     summary: Crear un nuevo pago
- *     tags: [Payments]
- *     security:
- *       - BearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/CreatePaymentRequest'
- *     responses:
- *       200:
- *         description: Pago creado exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 id:
- *                   type: string
- *                 paymentId:
- *                   type: string
- *                 status:
- *                   type: string
- *                 redirectUrl:
- *                   type: string
- *       400:
- *         description: Datos inválidos
- *       500:
- *         description: Error del servidor
- */
-exports.createPayment = async (req, res, next) => {
+exports.create = async (req, res) => {
   try {
-    const dto = req.body;
-    
-    // Verificar si ya existe un pago con este orderId
-    const existingPayment = await paymentRepository.findByOrderId(dto.metadata?.orderId);
-    if (existingPayment) {
-      return res.status(400).json({
-        success: false,
-        error: `Ya existe un pago con ese orderId: ${dto.metadata.orderId}`
-      });
-    }
-    
-    // Crear pago con servicio externo
-    const paymentResult = await paymentService.createPayment({
-      amount: dto.amount,
-      currency: dto.currency,
-      description: dto.description,
-      callbackUrl: dto.callbackUrl,
-      metadata: dto.metadata,
-      customerEmail: dto.customerEmail,
-      items: dto.items,
-      provider: dto.provider
-    });
-    
-    // Guardar la información de pago en nuestra base de datos
-    const payment = new Payment({
-      amount: new Money(dto.amount, dto.currency),
-      status: paymentResult.status,
-      provider: dto.provider,
-      providerPaymentId: paymentResult.providerPaymentId,
-      orderId: dto.metadata?.orderId,
-      metadata: {
-        ...dto.metadata,
-        processorResponse: paymentResult.processorResponse
+    const { body, headers } = req;
+    // Extraer datos desde el body o headers
+    const customerId = body.metadata?.customerId || headers["x-customer-id"];
+    const customerEmail = body.customerEmail || headers["x-customer-email"];
+
+    const createPaymentDto = body;
+
+    // Buscar el usuario por documentId para la relación
+    let cliente = null;
+    if (customerId) {
+      const usuario = await User.findOne({ _id: customerId });
+      if (usuario) {
+        cliente = usuario._id.toString();
       }
+    }
+
+    // Crear el pago con el servicio externo
+    const paymentResult = await paymentService.createPayment({
+      currency: createPaymentDto.currency,
+      description: createPaymentDto.description,
+      callbackUrl: createPaymentDto.callbackUrl,
+      metadata: createPaymentDto.metadata,
+      customerEmail,
+      items: createPaymentDto.items,
+      provider: createPaymentDto.provider,
     });
-    
-    const savedPayment = await paymentRepository.create(payment);
-    
+
+    // Guardar la información del pago en nuestra base de datos
+    const newPayment = new Payment({
+      amount: paymentResult.amount,
+      currency: body.currency,
+      status: PaymentStatus.PENDING,
+      provider: PaymentProvider[body.provider],
+      providerPaymentId: paymentResult.providerPaymentId,
+      orderId: paymentResult.externalReference,
+      metadata: {
+        ...body?.metadata,
+        orderId: paymentResult.externalReference,
+        processorResponse: paymentResult.processorResponse,
+        products: body.items?.map(item => ({
+          productId: item.id,
+          size: item.size || item.metadata?.size,
+          quantity: item.quantity,
+          unitPrice: item.unitPrice
+        }))
+      },
+      cliente,
+    });
+
+    const savedPayment = await newPayment.save();
+
     return res.status(201).json({
-      success: true,
-      id: savedPayment.id,
+      id: savedPayment._id,
       paymentId: savedPayment.providerPaymentId,
-      status: savedPayment.status,
-      redirectUrl: paymentResult.redirectUrl
+      status: savedPayment.estadoPago,
+      redirectUrl: paymentResult.redirectUrl,
     });
   } catch (error) {
-    next(error);
+    logger.error('Error creating payment:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-/**
- * @swagger
- * /api/payments/{id}:
- *   get:
- *     summary: Obtener estado de un pago
- *     tags: [Payments]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: ID de la orden de pago
- *     responses:
- *       200:
- *         description: Estado del pago recuperado exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               $ref: '#/components/schemas/PaymentStatusResponse'
- *       404:
- *         description: Pago no encontrado
- */
-exports.getPaymentStatus = async (req, res, next) => {
+exports.findByOrderId = async (req, res) => {
   try {
-    const orderId = req.params.id;
-    const payment = await paymentRepository.findByOrderId(orderId);
-    
+    const { orderId } = req.params;
+
+    const payment = await paymentService.findByOrderId(orderId);
+
     if (!payment) {
-      throw new PaymentNotFoundError();
+      return res.status(404).json({ success: false, message: 'Payment not found' });
     }
-    
-    // Si el pago tiene un reembolso registrado, devolver el registro de nuestra db
-    if (payment.metadata.refundDetails && payment.provider === PaymentProvider.STRIPE) {
-      return res.json({
-        success: true,
-        id: payment.id,
-        status: payment.status,
-        orderId: payment.orderId,
-        transactionId: payment.transactionId,
-        providerPaymentId: payment.providerPaymentId,
-        provider: payment.provider,
-        amount: payment.amount.amount,
-        currency: payment.amount.currency,
-        createdAt: payment.createdAt,
-        processorResponse: payment.metadata.processorResponse
-      });
-    }
-    
+
     try {
-      // Determinar qué ID usar para consultar el estado
-      const idsFromPayment = {
+      const paymentIds = {
         transactionId: payment.transactionId,
         providerPaymentId: payment.providerPaymentId,
-        orderId: payment.orderId
+        orderId: payment.orderId,
       };
-      
-      // Obtener el estado más reciente del proveedor de pago
-      const status = await paymentService.getPaymentDetails(
-        idsFromPayment,
-        payment.provider
-      );
-      
-      // Actualizar nuestro registro local si el estado ha cambiado
-      if (payment.status !== status) {
-        payment.status = status;
-        payment.updatedAt = new Date();
-        await paymentRepository.update(payment.id, {
-          status,
-          updatedAt: payment.updatedAt,
-          transactionId: payment.transactionId
+
+      if (payment?.metadata?.refundDetails && payment.proveedor === "STRIPE") {
+        return res.json({
+          id: payment._id,
+          status: payment.estadoPago,
+          orderId: payment.orderId,
+          transactionId: payment.transactionId,
+          providerPaymentId: payment.providerPaymentId,
+          provider: payment.proveedor,
+          amount: payment.monto,
+          currency: payment.moneda,
+          clienteId: payment.cliente?._id || null,
+          createdAt: payment.createdAt,
+          processorResponse: payment.metadata.processorResponse,
         });
       }
-      
-      // Si tenemos metadata, extraemos la respuesta del procesador
-      const processorResponse = payment.metadata?.processorResponse;
-      
+
+      // Obtener el estado más reciente del proveedor de pagos
+      const status = await paymentService.getPaymentDetails(paymentIds, payment.proveedor);
+
+      // Actualizar nuestro registro de pago si el estado ha cambiado
+      if (payment.estadoPago !== status) {
+        payment.estadoPago = status;
+        payment.transactionId = payment.transactionId;
+        await payment.save();
+      }
+
       return res.json({
-        success: true,
-        id: payment.id,
-        status: payment.status,
+        id: payment._id,
+        status: payment.estadoPago,
         orderId: payment.orderId,
         transactionId: payment.transactionId,
         providerPaymentId: payment.providerPaymentId,
-        provider: payment.provider,
-        amount: payment.amount.amount,
-        currency: payment.amount.currency,
+        provider: payment.proveedor,
+        amount: payment.monto,
+        currency: payment.moneda,
+        clienteId: payment.cliente?._id || null,
         createdAt: payment.createdAt,
-        processorResponse
+        processorResponse: payment.metadata?.processorResponse,
       });
     } catch (error) {
-      throw new PaymentProviderError(payment.provider, error);
+      throw new PaymentProviderError(payment.proveedor, error);
     }
   } catch (error) {
-    next(error);
+    logger.error('Error finding payment:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-/**
- * @swagger
- * /api/payments/{id}/refund:
- *   post:
- *     summary: Reembolsar un pago
- *     tags: [Payments]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: ID de la orden de pago
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/RefundRequest'
- *     responses:
- *       200:
- *         description: Pago reembolsado exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 id:
- *                   type: string
- *                 status:
- *                   type: string
- *                 refundId:
- *                   type: string
- *                 refundAmount:
- *                   type: object
- *                   properties:
- *                     amount:
- *                       type: number
- *                     currency:
- *                       type: string
- *                 refundStatus:
- *                   type: string
- *       404:
- *         description: Pago no encontrado
- *       400:
- *         description: Estado de pago inválido para reembolso
- */
-exports.refundPayment = async (req, res, next) => {
+exports.refund = async (req, res) => {
   try {
-    const paymentId = req.params.id;
+    const { orderId } = req.params;
     const { amount } = req.body;
-    
-    const payment = await paymentRepository.findByOrderId(paymentId);
+
+    const payment = await paymentService.findByOrderId(orderId);
+
     if (!payment) {
-      throw new PaymentNotFoundError();
+      return res.status(404).json({ success: false, message: 'Payment not found' });
     }
-    
-    if (!payment.canBeRefunded()) {
-      throw new InvalidPaymentStatusError(
-        payment.status,
-        PaymentStatus.APPROVED
-      );
+
+    if (payment.estadoPago !== PaymentStatus.APPROVED) {
+      return res.status(400).json({ 
+        success: false, 
+        message: `Invalid payment status: ${payment.estadoPago}. Expected: ${PaymentStatus.APPROVED}` 
+      });
     }
-    
-    // Si se proporciona un monto, crea una instancia de Money con ese monto
-    // Si no, usa el monto completo del pago
-    const refundAmount = amount
-      ? new Money(amount, payment.amount.currency)
-      : payment.amount;
-    
-    // Actualizamos el pago con el monto a reembolsar
-    payment.amount = refundAmount;
-    
-    const refundResult = await paymentService.refundPayment(payment);
-    
-    // Verificamos que el reembolso esté en un estado válido
-    if (!['APPROVED', 'PENDING', 'REFUNDED'].includes(refundResult.status)) {
-      throw new Error(`Refund status is ${refundResult.status}`);
-    }
-    
-    // Marcamos el pago como reembolsado
-    payment.markAsRefunded(
-      refundResult.refundId,
-      refundResult.processorResponse
-    );
-    
-    // Actualizamos el pago en la base de datos
-    await paymentRepository.update(payment.id, {
-      status: payment.status,
-      updatedAt: payment.updatedAt,
-      metadata: {
+
+    try {
+      // Actualizar el monto del pago si se proporciona
+      if (amount) {
+        payment.monto = amount;
+      }
+
+      const refundResult = await paymentService.refundPayment(payment);
+
+      // Verificar que el reembolso esté en un estado válido
+      if (!["APPROVED", "PENDING", "REFUNDED"].includes(refundResult.status)) {
+        throw new Error(`Refund status is ${refundResult.status}`);
+      }
+
+      // Actualizar el pago en la base de datos
+      payment.estadoPago = PaymentStatus.REFUNDED;
+      payment.metadata = {
         ...payment.metadata,
         refundDetails: {
           id: refundResult.refundId,
-          amount: refundAmount.amount,
-          currency: refundAmount.currency,
+          amount: amount || payment.monto,
+          currency: payment.moneda,
           date: new Date().toISOString(),
-          status: refundResult.status
-        }
-      }
-    });
-    
-    return res.json({
-      success: true,
-      id: payment.id,
-      status: payment.status,
-      refundId: refundResult.refundId,
-      refundAmount: {
-        amount: refundAmount.amount,
-        currency: refundAmount.currency
-      },
-      refundStatus: refundResult.status
-    });
+          status: refundResult.status,
+        },
+      };
+      
+      await payment.save();
+
+      return res.json({
+        id: payment._id,
+        status: payment.estadoPago,
+        refundId: refundResult.refundId,
+        refundAmount: amount || payment.monto,
+        refundStatus: refundResult.status,
+      });
+    } catch (error) {
+      throw new PaymentProviderError(payment.proveedor, error);
+    }
   } catch (error) {
-    next(error);
+    logger.error('Error refunding payment:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-/**
- * @swagger
- * /api/payments/{id}/refunds:
- *   get:
- *     summary: Obtener lista de reembolsos de un pago
- *     tags: [Payments]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: ID de la orden de pago
- *     responses:
- *       200:
- *         description: Lista de reembolsos obtenida exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 paymentId:
- *                   type: string
- *                 refunds:
- *                   type: array
- *                   items:
- *                     type: object
- *                     properties:
- *                       id:
- *                         type: string
- *                       amount:
- *                         type: number
- *                       status:
- *                         type: string
- *                       dateCreated:
- *                         type: string
- *                         format: date-time
- *       404:
- *         description: Pago no encontrado
- */
-exports.getRefunds = async (req, res, next) => {
+exports.getRefunds = async (req, res) => {
   try {
-    const paymentId = req.params.id;
-    
-    const payment = await paymentRepository.findByOrderId(paymentId);
-    if (!payment) {
-      throw new PaymentNotFoundError();
-    }
-    
-    const paymentIds = {
-      transactionId: payment.transactionId,
-      providerPaymentId: payment.providerPaymentId,
-      orderId: payment.orderId,
-      payment_intent: payment.metadata?.webhookData?.payment_intent
-    };
-    
-    const refundsResult = await paymentService.getRefunds(
-      paymentIds,
-      payment.provider
-    );
-    
-    // Si encuentra el reembolso y no está registrado, actualiza el pago en la base de datos
-    if (refundsResult && refundsResult.refunds.length > 0 && !payment.metadata.refundDetails) {
-      const [latestRefund] = refundsResult.refunds; // Tomar el primer reembolso
-      
-      // Actualizar el estado del pago a "Refunded"
-      payment.markAsRefunded(latestRefund.id, refundsResult);
-      
-      // Actualizar el pago en la base de datos con los detalles del reembolso
-      await paymentRepository.update(payment.id, {
-        status: payment.status,
-        updatedAt: payment.updatedAt,
-        metadata: {
-          ...payment.metadata,
-          refundDetails: {
-            id: latestRefund.id,
-            amount: latestRefund.amount,
-            date: latestRefund.dateCreated.toISOString(),
-            status: latestRefund.status,
-            metadata: latestRefund.metadata
-          }
-        }
-      });
-    }
-    
-    return res.json({
-      success: true,
-      paymentId: payment.id,
-      refunds: refundsResult.refunds.map(refund => ({
-        ...refund,
-        paymentId: payment.id
-      }))
-    });
-  } catch (error) {
-    next(error);
-  }
-};
+    const { orderId } = req.params;
 
-/**
- * @swagger
- * /api/payments/refunds/{id}:
- *   get:
- *     summary: Obtener detalles de un reembolso específico
- *     tags: [Payments]
- *     security:
- *       - BearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: ID del pago
- *     responses:
- *       200:
- *         description: Detalles del reembolso obtenidos exitosamente
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 id:
- *                   type: string
- *                 paymentId:
- *                   type: string
- *                 amount:
- *                   type: number
- *                 status:
- *                   type: string
- *                 dateCreated:
- *                   type: string
- *                   format: date-time
- *                 metadata:
- *                   type: object
- *       404:
- *         description: Pago o reembolso no encontrado
- */
-exports.getRefund = async (req, res, next) => {
-  try {
-    const paymentId = req.params.id;
-    
-    const payment = await paymentRepository.findByOrderId(paymentId);
+    const payment = await paymentService.findByOrderId(orderId);
+
     if (!payment) {
-      throw new PaymentNotFoundError();
+      return res.status(404).json({ success: false, message: 'Payment not found' });
     }
-    
-    // Verificamos que el pago tenga un reembolso registrado
-    if (!payment.metadata.refundDetails) {
-      return res.status(404).json({
-        success: false,
-        error: `No refund has been recorded for payment ${paymentId}`
-      });
-    }
-    
+
     try {
       const paymentIds = {
         transactionId: payment.transactionId,
         providerPaymentId: payment.providerPaymentId,
         orderId: payment.orderId,
         payment_intent: payment.metadata?.webhookData?.payment_intent,
-        refundId: payment.metadata.refundDetails.id
       };
-      
-      const refundResult = await paymentService.getRefund(
-        paymentIds,
-        payment.provider
-      );
-      
+
+      const refundsResult = await paymentService.getRefunds(paymentIds, payment.proveedor);
+
+      // Si encuentra el reembolso y no está registrado, actualiza el pago
+      if (
+        refundsResult &&
+        refundsResult.refunds.length > 0 &&
+        !payment.metadata.refundDetails
+      ) {
+        const [latestRefund] = refundsResult.refunds;
+
+        // Actualizar el pago en la base de datos con los detalles del reembolso
+        payment.estadoPago = PaymentStatus.REFUNDED;
+        payment.metadata = {
+          ...payment.metadata,
+          refundDetails: {
+            id: latestRefund.id,
+            amount: latestRefund.amount,
+            date: latestRefund.dateCreated.toISOString(),
+            status: latestRefund.status,
+            metadata: latestRefund.metadata,
+          },
+        };
+        
+        await payment.save();
+      }
+
       return res.json({
-        success: true,
+        paymentId: payment._id,
+        refunds: refundsResult.refunds.map((refund) => ({
+          ...refund,
+          paymentId: payment._id,
+        })),
+      });
+    } catch (error) {
+      throw new PaymentProviderError(payment.proveedor, error);
+    }
+  } catch (error) {
+    logger.error('Error getting refunds:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.getRefund = async (req, res) => {
+  try {
+    const { orderId, refundId } = req.params;
+
+    const payment = await paymentService.findByOrderId(orderId);
+
+    if (!payment) {
+      return res.status(404).json({ success: false, message: 'Payment not found' });
+    }
+
+    // Verificamos que el pago tenga un reembolso registrado
+    if (!payment.metadata.refundDetails) {
+      return res.status(404).json({ success: false, message: `No refund has been recorded for payment ${orderId}` });
+    }
+
+    try {
+      const paymentIds = {
+        transactionId: payment.transactionId,
+        providerPaymentId: payment.providerPaymentId,
+        orderId: payment.orderId,
+        payment_intent: payment.metadata?.webhookData?.payment_intent,
+        refundId: payment.metadata.refundDetails.id,
+      };
+
+      const refundResult = await paymentService.getRefund(paymentIds, payment.proveedor);
+
+      return res.json({
         id: refundResult.id,
-        paymentId: payment.id,
+        paymentId: payment._id,
         amount: refundResult.amount,
         status: refundResult.status,
         dateCreated: refundResult.dateCreated,
-        metadata: refundResult.metadata
+        metadata: refundResult.metadata,
       });
     } catch (error) {
-      console.error(
-        `Error getting refund for payment ${payment.id}`,
-        error
-      );
-      throw error;
+      throw new PaymentProviderError(payment.proveedor, error);
     }
   } catch (error) {
-    next(error);
+    logger.error('Error getting refund:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
-/**
- * @swagger
- * /api/payments/webhook/mercadopago:
- *   post:
- *     summary: Procesar webhook de Mercado Pago
- *     tags: [Payments]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *     responses:
- *       200:
- *         description: Webhook procesado exitosamente
- */
-exports.handleMercadoPagoWebhook = async (req, res, next) => {
+exports.processWebhook = async (req, res) => {
   try {
-    await paymentService.processWebhook({
-      payload: req.body,
-      provider: 'MERCADO_PAGO'
-    });
-    
-    return res.json({ success: true });
-  } catch (error) {
-    // No propagar el error al cliente para evitar que MercadoPago reintente
-    console.error('Error processing MercadoPago webhook:', error);
-    return res.status(200).json({ success: true });
-  }
-};
+    const signature = req.headers["stripe-signature"];
+    let body = req.body;
+    let provider = PaymentProvider.MERCADO_PAGO;
 
-/**
- * @swagger
- * /api/payments/webhook/stripe:
- *   post:
- *     summary: Procesar webhook de Stripe
- *     tags: [Payments]
- *     parameters:
- *       - in: header
- *         name: stripe-signature
- *         required: true
- *         schema:
- *           type: string
- *         description: Firma del webhook de Stripe
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *     responses:
- *       200:
- *         description: Webhook procesado exitosamente
- */
-exports.handleStripeWebhook = async (req, res, next) => {
-  try {
-    const signature = req.headers['stripe-signature'];
-    
+    if (signature) {
+      body = req.rawBody; // Raw body should be available from middleware
+      provider = PaymentProvider.STRIPE;
+    }
+
     const result = await paymentService.processWebhook({
-      payload: req.body,
+      payload: body,
       signature,
-      provider: 'STRIPE'
+      provider,
     });
-    
+
+    if (result) {
+      await paymentService.updatePaymentFromWebhook(result);
+    }
+
+    res.status(200).json({ success: true });
+  } catch (error) {
+    logger.error("Error processing webhook:", error);
+
+    // Manejo de errores específicos
+    if (error instanceof PaymentProviderError) {
+      res.status(502).json({ success: false, message: error.message });
+    } else if (error instanceof PaymentNotFoundError) {
+      res.status(404).json({ success: false, message: error.message });
+    } else {
+      res.status(500).json({ success: false, message: error.message });
+    }
+  }
+};
+
+exports.findAll = async (req, res) => {
+  try {
+    const result = await paymentService.findAll(req.query);
+
     return res.json({
-      success: true,
-      ...result
+      data: result.results,
+      meta: {
+        pagination: {
+          page: result.pagination.page,
+          pageSize: result.pagination.pageSize,
+          pageCount: result.pagination.pageCount,
+          total: result.pagination.total,
+        },
+      },
     });
   } catch (error) {
-    // No propagar el error al cliente para evitar que Stripe reintente
-    console.error('Error processing Stripe webhook:', error);
-    return res.status(200).json({ success: true });
+    logger.error('Error finding all payments:', error);
+    return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.findByUserId = async (req, res) => {
+  try {
+    const { userId } = req.params;
+
+    const result = await paymentService.findByUserId(userId, req.query);
+
+    return res.json({
+      data: result.results,
+      meta: {
+        pagination: {
+          page: result.pagination.page,
+          pageSize: result.pagination.pageSize,
+          pageCount: result.pagination.pageCount,
+          total: result.pagination.total,
+        },
+      },
+    });
+  } catch (error) {
+    if (error.message === "Usuario no encontrado") {
+      return res.status(404).json({ success: false, message: "Usuario no encontrado" });
+    }
+    
+    logger.error('Error finding user payments:', error);
+    return res.status(500).json({ success: false, message: error.message });
   }
 };

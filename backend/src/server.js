@@ -69,7 +69,7 @@ app.use("/", cartRoutes);
 app.use("/", purchaseRoutes);
 app.use("/", userRoutes);
 app.use('/', paymentRoutes);
-app.use("/addresses", addressRoutes);
+app.use("/", addressRoutes);
 
 // Basic route for server test
 app.get("/", (req, res) => {

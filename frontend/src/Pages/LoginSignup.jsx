@@ -65,7 +65,15 @@ const LoginSignup = () => {
       const data = await response.json();
       
       if (data.success) {
+        // Obtener headers personalizados
+        const customerId = response.headers.get('x-customer-id');
+        const customerEmail = response.headers.get('x-customer-email');
+
+        // Guardarlos en localStorage
         localStorage.setItem('auth-token', data.token);
+        if (customerId) localStorage.setItem('customer-id', customerId);
+        if (customerEmail) localStorage.setItem('customer-email', customerEmail);
+
         window.location.replace("/");
       } else {
         handleError(data.errors);
@@ -91,7 +99,15 @@ const LoginSignup = () => {
       const data = await response.json();
       
       if (data.success) {
+        // Obtener headers personalizados
+        const customerId = response.headers.get('x-customer-id');
+        const customerEmail = response.headers.get('x-customer-email');
+
+        // Guardarlos en localStorage
         localStorage.setItem('auth-token', data.token);
+        if (customerId) localStorage.setItem('customer-id', customerId);
+        if (customerEmail) localStorage.setItem('customer-email', customerEmail);
+
         window.location.replace("/");
       } else {
         handleError(data.errors);

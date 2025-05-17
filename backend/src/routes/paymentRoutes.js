@@ -3,23 +3,31 @@ const router = express.Router();
 const paymentController = require('../controllers/paymentController');
 const authenticate = require('../middleware/auth');
 
-// POST /api/payments - Crear un nuevo pago
-router.post('/', authenticate, paymentController.createPayment);
+// Crear un nuevo pago
+router.post("/payments", paymentController.create);
 
-// GET /api/payments/:id - Obtener estado de un pago
-router.get('/:id', authenticate, paymentController.getPaymentStatus);
+// Obtener detalles de un pago por orderId
+router.get("/payments/:orderId", paymentController.findByOrderId);
 
-// POST /api/payments/:id/refund - Reembolsar un pago
-router.post('/:id/refund', authenticate, paymentController.refundPayment);
+// Reembolsar un pago
+router.post("/payments/:orderId/refund", authenticate, paymentController.refund);
 
-// GET /api/payments/:id/refunds - Obtener lista de reembolsos de un pago
-router.get('/:id/refunds', authenticate, paymentController.getRefunds);
+// Obtener todos los reembolsos de un pago
+router.get("/payments/:orderId/refunds", authenticate, paymentController.getRefunds);
 
-// GET /api/payments/refunds/:id - Obtener un reembolso específico
-router.get('/refunds/:id', authenticate, paymentController.getRefund);
+// Obtener un reembolso específico
+router.get("/payments/refunds/:orderId", authenticate, paymentController.getRefund);
 
-// Webhooks - No requieren autenticación
-router.post('/webhook/mercadopago', paymentController.handleMercadoPagoWebhook);
-router.post('/webhook/stripe', express.raw({type: 'application/json'}), paymentController.handleStripeWebhook);
+// Webhook de MercadoPago
+router.post("/payments/webhook/mercadopago", paymentController.processWebhook);
+
+// Webhook de Stripe (necesita el cuerpo sin procesar)
+router.post("/payments/webhook/stripe", express.raw({type: 'application/json'}), paymentController.processWebhook);
+
+// Obtener todos los pagos (con paginación y filtros)
+router.get("/payments", authenticate, paymentController.findAll);
+
+// Obtener pagos de un usuario específico
+router.get("/payments/user/:userId", authenticate, paymentController.findByUserId);
 
 module.exports = router;

@@ -31,6 +31,9 @@ exports.login = async (req, res) => {
     const token = jwt.sign(payload, JWT_SECRET);
     
     console.log("Login successful for user ID:", user._id);
+    res.setHeader("x-customer-id", user._id.toString());
+    res.setHeader("x-customer-email", user.email);
+    res.setHeader("Access-Control-Expose-Headers", "x-customer-id,x-customer-email");
     res.json({ success: true, token });
     
   } catch (error) {
@@ -86,6 +89,9 @@ exports.signup = async (req, res) => {
     const token = jwt.sign(payload, JWT_SECRET);
     
     console.log("Registration successful for user ID:", user.id);
+    res.setHeader("x-customer-id", user._id.toString());
+    res.setHeader("x-customer-email", user.email);
+    res.setHeader("Access-Control-Expose-Headers", "x-customer-id,x-customer-email");
     res.json({ success: true, token });
     
   } catch (error) {

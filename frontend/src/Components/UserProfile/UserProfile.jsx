@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import './UserProfile.css';
-import { backend_url } from '../../App';
+import { backend_url, currency } from "../../App";
 
 const UserProfile = () => {
   const [userData, setUserData] = useState(null);
